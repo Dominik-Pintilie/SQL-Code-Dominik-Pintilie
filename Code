@@ -1,0 +1,111 @@
+-- SQL CODE DOMINIK PINTILIE, STUDENT-ID: 4312669, dominik.pintilie@web.de
+-- For each index a tables were created, 
+-- which were summarized in the final view
+
+-- Calculating the average temperature
+DROP TABLE IF EXISTS average_temp CASCADE;
+CREATE TABLE average_temp AS
+    SELECT
+        avg(data.value) as avg_t,
+        metadata.device_id as HOBO_id
+    FROM data
+    JOIN metadata ON data.meta_id= metadata.id
+    WHERE metadata.term_id= 11
+    group by metadata.device_id
+    order by metadata.device_id ASC
+;
+-- Filtering the measurements (06:00 to 17:59)
+-- and generate the average day-time temperature
+DROP TABLE IF EXISTS HOBO_day;
+CREATE TABLE HOBO_day AS
+    SELECT
+        avg(data.value) as avg_t,
+        metadata.device_id as HOBO_id
+    FROM data
+    JOIN metadata ON data.meta_id= metadata.id
+    WHERE metadata.term_id= 11
+    AND EXTRACT(HOUR FROM data.tstamp) >= 6 
+    AND EXTRACT(HOUR FROM data.tstamp) < 18
+    group by metadata.device_id
+    order by metadata.device_id ASC
+;
+-- Filtering the measurements (18:00 to 05:59)
+-- and generate the average night-time temperature
+DROP TABLE IF EXISTS HOBO_night;
+CREATE TABLE HOBO_night AS
+    SELECT
+        avg(data.value) as avg_t,
+        metadata.device_id as HOBO_id
+    FROM data
+    JOIN metadata ON data.meta_id= metadata.id
+        WHERE metadata.term_id= 11
+    AND (EXTRACT(HOUR FROM data.tstamp) < 6 OR EXTRACT(HOUR FROM data.tstamp) >= 18)
+    group by metadata.device_id
+    order by metadata.device_id ASC
+;
+-- normalize the data and create table that is refered to in the next step
+DROP VIEW IF EXISTS data_norm;
+CREATE VIEW data_norm AS
+    SELECT
+        row_number() OVER (PARTITION BY meta_id, variable_id ORDER BY tstamp ASC) as measurement_index,
+        *,
+        value - avg(value) OVER (PARTITION BY meta_id, variable_id) AS norm,
+        avg(value) OVER (PARTITION BY meta_id, variable_id) AS group_avg    
+    FROM data
+;
+
+-- calculate the correlation for the 2020 HOBO average temperatures
+-- (as far as data is avaliable)
+drop table if exists corr1y;
+create table corr1y as
+    SELECT
+        meta21.device_id,
+        meta21.id,                              
+        avg(d.value) AS "mean",                 
+        corr(d.norm, d20.norm) AS "korrelation1"     
+    FROM data_norm d                            
+    JOIN meta21 on meta21.id = d.meta_id       
+    JOIN metadata m20 on meta21.close_meta20_id=m20.id
+    JOIN data_norm d20 on m20.id=d20.meta_id 
+    AND d.measurement_index=d20.measurement_index
+    GROUP BY meta21.id, meta21.device_id
+;
+-- calculate the correlation for the 2020 HOBO average temperatures
+-- (as far as data is avaliable)
+drop table if exists corr2y;
+create table corr2y as
+    SELECT
+        meta21.device_id,
+        meta21.id,                           
+        avg(d.value) AS "mean",                 
+        corr(d.norm, d20.norm) AS "korrelation2"     
+    FROM data_norm d                            
+    JOIN meta21 on meta21.id = d.meta_id        
+    JOIN metadata m20 on meta21.close_meta19_id=m20.id
+    JOIN data_norm d20 on m20.id=d20.meta_id 
+    AND d.measurement_index=d20.measurement_index
+    GROUP BY meta21.id, meta21.device_id
+;
+-- Final view of the temperature indices, 
+-- selected from the previously created tables with an left outer join,
+-- assuring that also the HOBOs where the calculation of the correlation 
+-- coefficients was not possible are displayed as well.
+drop view if exists temperature_indices_Pintilie;
+create view temperature_indices_Pintilie as
+    SELECT 
+    		cor2.korrelation2,
+    		cor1.korrelation1,
+    		d.hobo_id,
+    		 a.avg_t as T_avg,
+    		d.avg_t as Td,
+    		n.avg_t as Tn,
+    		(d.avg_t-n.avg_t) as Tnd
+    FROM HOBO_day d
+    JOIN HOBO_night n ON d.hobo_id= n.hobo_id
+    JOIN average_temp a on d.hobo_id = a.hobo_id
+    left outer join corr2y cor2 on d.hobo_id = cor2.device_id
+    left outer join corr1y cor1 on d.hobo_id = cor1.device_id
+;
+
+--show view
+select * from temperature_indices_Pintilie
